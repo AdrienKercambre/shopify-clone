@@ -65,9 +65,11 @@ const GET_METAOBJECT_DEFINITIONS = `
         node {
           name
           type
+          description
           fieldDefinitions {
             name
             key
+            description
             type {
               name
             }
@@ -252,6 +254,7 @@ async function duplicateMetaobjectDefinitions() {
         definition: {
           name: def.name,
           type: def.type,
+          description: def.description,
           access: {
             storefront: "PUBLIC_READ"
           },
@@ -372,6 +375,7 @@ async function duplicateMetaobjectDefinitions() {
                 create: {
                   name: field.name,
                   key: field.key,
+                  description: field.description,
                   type: field.type.name,
                   required: field.required,
                   validations: field.validations || []
@@ -384,14 +388,41 @@ async function duplicateMetaobjectDefinitions() {
         const result = await targetClient.request(UPDATE_METAOBJECT_DEFINITION, updateVariables);
         if (result.metaobjectDefinitionUpdate.userErrors.length > 0) {
           console.log(`\n  ℹ️ Résultat de la mise à jour :`);
-          result.metaobjectDefinitionUpdate.userErrors.forEach(error => {
+          for (const error of result.metaobjectDefinitionUpdate.userErrors) {
             if (error.message.includes('is already taken')) {
               const fieldName = error.message.split('"')[1];
               console.log(`    ℹ️ Le champ "${fieldName}" existe déjà dans la définition`);
+              
+              // Trouver le champ source avec sa description
+              const sourceField = def.fieldDefinitions.find(f => f.key === fieldName);
+              if (sourceField?.description) {
+                try {
+                  // Mise à jour de la description du champ existant
+                  const updateResult = await targetClient.request(UPDATE_METAOBJECT_DEFINITION, {
+                    id: definitionId,
+                    definition: {
+                      fieldDefinitions: [{
+                        update: {
+                          key: fieldName,
+                          description: sourceField.description
+                        }
+                      }]
+                    }
+                  });
+                  
+                  if (updateResult.metaobjectDefinitionUpdate.userErrors.length === 0) {
+                    console.log(`      ✅ Description mise à jour pour le champ "${fieldName}"`);
+                  } else {
+                    console.log(`      ⚠️ Impossible de mettre à jour la description du champ "${fieldName}"`);
+                  }
+                } catch (updateError) {
+                  console.log(`      ❌ Erreur lors de la mise à jour de la description : ${updateError.message}`);
+                }
+              }
             } else {
               console.log(`    ⚠️ ${error.message}`);
             }
-          });
+          }
         } else {
           console.log(`\n  ✅ Tous les champs ont été ajoutés avec succès`);
         }
@@ -583,6 +614,7 @@ async function migrateShopifyData() {
           definition: {
             name: def.name,
             type: def.type,
+            description: def.description,
             access: {
               storefront: "PUBLIC_READ"
             },
@@ -704,6 +736,7 @@ async function migrateShopifyData() {
                 create: {
                   name: field.name,
                   key: field.key,
+                  description: field.description,
                   type: field.type.name,
                   required: field.required,
                   validations: field.validations || []
@@ -716,14 +749,41 @@ async function migrateShopifyData() {
         const result = await targetClient.request(UPDATE_METAOBJECT_DEFINITION, updateVariables);
         if (result.metaobjectDefinitionUpdate.userErrors.length > 0) {
           console.log(`\n  ℹ️ Résultat de la mise à jour :`);
-          result.metaobjectDefinitionUpdate.userErrors.forEach(error => {
+          for (const error of result.metaobjectDefinitionUpdate.userErrors) {
             if (error.message.includes('is already taken')) {
               const fieldName = error.message.split('"')[1];
               console.log(`    ℹ️ Le champ "${fieldName}" existe déjà dans la définition`);
+              
+              // Trouver le champ source avec sa description
+              const sourceField = def.fieldDefinitions.find(f => f.key === fieldName);
+              if (sourceField?.description) {
+                try {
+                  // Mise à jour de la description du champ existant
+                  const updateResult = await targetClient.request(UPDATE_METAOBJECT_DEFINITION, {
+                    id: definitionId,
+                    definition: {
+                      fieldDefinitions: [{
+                        update: {
+                          key: fieldName,
+                          description: sourceField.description
+                        }
+                      }]
+                    }
+                  });
+                  
+                  if (updateResult.metaobjectDefinitionUpdate.userErrors.length === 0) {
+                    console.log(`      ✅ Description mise à jour pour le champ "${fieldName}"`);
+                  } else {
+                    console.log(`      ⚠️ Impossible de mettre à jour la description du champ "${fieldName}"`);
+                  }
+                } catch (updateError) {
+                  console.log(`      ❌ Erreur lors de la mise à jour de la description : ${updateError.message}`);
+                }
+              }
             } else {
               console.log(`    ⚠️ ${error.message}`);
             }
-          });
+          }
         } else {
           console.log(`\n  ✅ Tous les champs ont été ajoutés avec succès`);
         }
