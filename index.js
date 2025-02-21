@@ -315,19 +315,26 @@ async function duplicateMetaobjectDefinitions() {
           definition: {
             fieldDefinitions: def.fieldDefinitions.map(field => {
               if (field.type.name.includes('metaobject_reference') || field.type.name.includes('mixed_reference')) {
-                console.log(`\n🔗 Configuration de la référence pour le champ "${field.name}" :`);
+                console.log(`\n  🔗 Configuration de la référence pour le champ "${field.name}" :
+    - Clé : ${field.key}
+    - Type : ${field.type.name}`);
 
-                const matchingDefinition = targetDefinitionsResponse.metaobjectDefinitions.edges.find(edge => 
-                  field.name.toLowerCase().includes(edge.node.name.toLowerCase())
-                );
+                // Chercher le metaobjet en gérant le cas singulier/pluriel
+                const matchingDefinition = targetDefinitionsResponse.metaobjectDefinitions.edges.find(edge => {
+                  const fieldKey = field.key.toLowerCase();
+                  const metaobjectType = edge.node.type.toLowerCase();
+                  
+                  return fieldKey === metaobjectType || // Égalité exacte
+                         (fieldKey === `${metaobjectType}s`) || // Pluriel simple
+                         (fieldKey.slice(0, -1) === metaobjectType); // Du pluriel vers le singulier
+                });
 
                 if (matchingDefinition) {
                   console.log(`    ✅ Metaobjet cible trouvé :
-    - Nom : ${matchingDefinition.node.name}
-    - Type : ${matchingDefinition.node.type}
-    - Type utilisé pour validation : ${matchingDefinition.node.type.toLowerCase()}
-    - Validation finale : ${JSON.stringify([matchingDefinition.node.type.toLowerCase()])}
-  `);
+    - Nom du champ : ${field.name}
+    - Clé du champ : ${field.key}
+    - Type du metaobjet : ${matchingDefinition.node.type}
+    - ID : ${matchingDefinition.node.id}`);
 
                   if (field.type.name.includes('metaobject_reference')) {
                     return {
@@ -640,19 +647,26 @@ async function migrateShopifyData() {
           definition: {
             fieldDefinitions: def.fieldDefinitions.map(field => {
               if (field.type.name.includes('metaobject_reference') || field.type.name.includes('mixed_reference')) {
-                console.log(`\n🔗 Configuration de la référence pour le champ "${field.name}" :`);
+                console.log(`\n  🔗 Configuration de la référence pour le champ "${field.name}" :
+    - Clé : ${field.key}
+    - Type : ${field.type.name}`);
 
-                const matchingDefinition = targetDefinitions.metaobjectDefinitions.edges.find(edge => 
-                  field.name.toLowerCase().includes(edge.node.name.toLowerCase())
-                );
+                // Chercher le metaobjet en gérant le cas singulier/pluriel
+                const matchingDefinition = targetDefinitions.metaobjectDefinitions.edges.find(edge => {
+                  const fieldKey = field.key.toLowerCase();
+                  const metaobjectType = edge.node.type.toLowerCase();
+                  
+                  return fieldKey === metaobjectType || // Égalité exacte
+                         (fieldKey === `${metaobjectType}s`) || // Pluriel simple
+                         (fieldKey.slice(0, -1) === metaobjectType); // Du pluriel vers le singulier
+                });
 
                 if (matchingDefinition) {
                   console.log(`    ✅ Metaobjet cible trouvé :
-    - Nom : ${matchingDefinition.node.name}
-    - Type : ${matchingDefinition.node.type}
-    - Type utilisé pour validation : ${matchingDefinition.node.type.toLowerCase()}
-    - Validation finale : ${JSON.stringify([matchingDefinition.node.type.toLowerCase()])}
-  `);
+    - Nom du champ : ${field.name}
+    - Clé du champ : ${field.key}
+    - Type du metaobjet : ${matchingDefinition.node.type}
+    - ID : ${matchingDefinition.node.id}`);
 
                   if (field.type.name.includes('metaobject_reference')) {
                     return {
