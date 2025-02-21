@@ -252,6 +252,14 @@ async function duplicateMetaobjectDefinitions() {
         definition: {
           name: def.name,
           type: def.type,
+          access: {
+            storefront: "PUBLIC_READ"
+          },
+          capabilities: {
+            publishable: {
+              enabled: true
+            }
+          },
           fieldDefinitions: [] // Aucun champ pour l'instant
         }
       };
@@ -568,6 +576,14 @@ async function migrateShopifyData() {
           definition: {
             name: def.name,
             type: def.type,
+            access: {
+              storefront: "PUBLIC_READ"
+            },
+            capabilities: {
+              publishable: {
+                enabled: true
+              }
+            },
             fieldDefinitions: [] // Structure vide
           }
         };
