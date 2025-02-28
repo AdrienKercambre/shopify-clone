@@ -2,18 +2,6 @@ import { GraphQLClient } from 'graphql-request';
 import dotenv from 'dotenv';
 import fs from 'fs';
 dotenv.config();
-// Configuration des clients GraphQL
-const sourceClient = new GraphQLClient(`https://${process.env.SOURCE_STORE_NAME}.myshopify.com/admin/api/${process.env.API_VERSION}/graphql.json`, {
-  headers: {
-    'X-Shopify-Access-Token': process.env.SOURCE_ACCESS_TOKEN,
-  },
-});
-
-const targetClient = new GraphQLClient(`https://${process.env.TARGET_STORE_NAME}.myshopify.com/admin/api/${process.env.API_VERSION}/graphql.json`, {
-  headers: {
-    'X-Shopify-Access-Token': process.env.TARGET_ACCESS_TOKEN,
-  },
-});
 
 // Requêtes GraphQL
 const GET_METAFIELD_DEFINITIONS = `
@@ -141,108 +129,6 @@ const GET_METAOBJECT_DEFINITIONS_IDS = `
   }
 `;
 
-// Liste de tous les types d'objets possibles
-const OWNER_TYPES = [
-  'ARTICLE',
-  'BLOG',
-  'COLLECTION',
-  'CUSTOMER',
-  'ORDER',
-  'PAGE',
-  'PRODUCT',
-  'PRODUCTVARIANT',
-  'SHOP'
-];
-
-async function getAllMetafieldDefinitions() {
-  let allDefinitions = [];
-  console.log('🚀 Début de la récupération des définitions de metafields...');
-  
-  for (const ownerType of OWNER_TYPES) {
-    let definitions = [];
-    let hasNextPage = true;
-    let cursor = null;
-    console.log(`\n📦 Traitement des metafields pour le type: ${ownerType}`);
-
-    while (hasNextPage) {
-      const response = await sourceClient.request(GET_METAFIELD_DEFINITIONS, { 
-        after: cursor,
-        ownerType: ownerType 
-      });
-      const newDefinitions = response.metafieldDefinitions.edges.map(edge => edge.node);
-      definitions = definitions.concat(newDefinitions);
-      console.log(`  ✓ ${newDefinitions.length} définitions récupérées pour ${ownerType}`);
-      
-      hasNextPage = response.metafieldDefinitions.pageInfo.hasNextPage;
-      cursor = response.metafieldDefinitions.pageInfo.endCursor;
-    }
-
-    console.log(`✅ Total pour ${ownerType}: ${definitions.length} définitions`);
-    allDefinitions = allDefinitions.concat(definitions);
-  }
-
-  console.log(`\n🎉 Total final: ${allDefinitions.length} définitions de metafields`);
-  console.log('Exemple de définition:', JSON.stringify(allDefinitions[0], null, 2));
-  return allDefinitions;
-}
-
-async function duplicateMetafieldDefinitions() {
-  try {
-    const definitions = await getAllMetafieldDefinitions();
-    console.log('\n🔄 Début de la duplication des metafield definitions...');
-    
-    for (const def of definitions) {
-      if (def.ownerType === 'COLLECTION') {
-      console.log(`  ⏳ Création de la définition: ${def.namespace}.${def.key} (${def.ownerType})`);
-      const variables = {
-        definition: {
-          name: def.name,
-          namespace: def.namespace,
-          key: def.key,
-          description: def.description,
-          type: def.type.name,
-          ownerType: def.ownerType,
-          validations: def.validations
-        }
-      };
-      console.log(variables);
-      
-      try {
-        const result = await targetClient.request(CREATE_METAFIELD_DEFINITION, variables);
-        if (result.metafieldDefinitionCreate.userErrors.length > 0) {
-          console.log(`  ⚠️ Erreur pour ${def.namespace}.${def.key}:`, result.metafieldDefinitionCreate.userErrors);
-        } else {
-          console.log(`  ✅ Définition créée avec succès: ${def.namespace}.${def.key}`);
-        }
-      } catch (error) {
-        console.error(`  ❌ Erreur lors de la création de ${def.namespace}.${def.key}:`, error.message);
-      }
-      }
-    }
-  } catch (error) {
-    console.error('❌ Erreur globale:', error);
-  }
-}
-
-async function getAllMetaobjectDefinitions() {
-  console.log('\n🚀 Début de la récupération des définitions de metaobjects...');
-  let definitions = [];
-  let hasNextPage = true;
-  let cursor = null;
-
-  while (hasNextPage) {
-    const response = await sourceClient.request(GET_METAOBJECT_DEFINITIONS, { after: cursor });
-    const newDefinitions = response.metaobjectDefinitions.edges.map(edge => edge.node);
-    definitions = definitions.concat(newDefinitions);
-    hasNextPage = response.metaobjectDefinitions.pageInfo.hasNextPage;
-    cursor = response.metaobjectDefinitions.pageInfo.endCursor;
-  }
-
-  console.log(`\n🎉 Total: ${definitions.length} définitions de metaobjects`);
-  console.log('📝 Liste complète des types:', definitions.map(def => def.type).join(', '));
-  return definitions;
-}
-
 async function duplicateMetaobjectDefinitions() {
   try {
     const definitions = await getAllMetaobjectDefinitions();
@@ -271,7 +157,7 @@ async function duplicateMetaobjectDefinitions() {
       };
       
       try {
-        const result = await targetClient.request(CREATE_METAOBJECT_DEFINITION, variables);
+        const result = await this.targetClient.request(CREATE_METAOBJECT_DEFINITION, variables);
         if (result.metaobjectDefinitionCreate.userErrors.length > 0) {
           const errors = result.metaobjectDefinitionCreate.userErrors;
           
@@ -332,7 +218,8 @@ async function duplicateMetaobjectDefinitions() {
                   
                   return fieldKey === metaobjectType || // Égalité exacte
                          (fieldKey === `${metaobjectType}s`) || // Pluriel simple
-                         (fieldKey.slice(0, -1) === metaobjectType); // Du pluriel vers le singulier
+                         (fieldKey.slice(0, -1) === metaobjectType) || // Du pluriel vers le singulier
+                         (`${fieldKey}s` === metaobjectType); // Du singulier vers le pluriel
                 });
 
                 if (matchingDefinition) {
@@ -439,123 +326,187 @@ async function duplicateMetaobjectDefinitions() {
   }
 }
 
-async function exportDefinitions() {
-  try {
-    console.log('🚀 Début de l\'export des définitions...');
+class ManageMeta {
+  constructor(sourceStoreName, sourceAccessToken, targetStoreName, targetAccessToken, apiVersion) {
+    this.sourceClient = new GraphQLClient(`https://${sourceStoreName}.myshopify.com/admin/api/${apiVersion}/graphql.json`, {
+      headers: {
+        'X-Shopify-Access-Token': sourceAccessToken,
+      },
+    });
+    this.targetClient = new GraphQLClient(`https://${targetStoreName}.myshopify.com/admin/api/${apiVersion}/graphql.json`, {
+      headers: {
+        'X-Shopify-Access-Token': targetAccessToken,
+      },
+    });
+    this.metafieldsOwnerTypes = [
+      'ARTICLE',
+      'BLOG',
+      'COLLECTION',
+      'CUSTOMER',
+      'ORDER',
+      'PAGE',
+      'PRODUCT',
+      'PRODUCTVARIANT',
+      'SHOP'
+    ];
+
+    // Lancer l'exécution immédiatement
+    this.init();
+  }
+
+  async init() {
+    try {
+      this.logMessage('start', 'Démarrage de la migration...');
+      this.metafieldDefinitions = await this.getAllMetafieldDefinitions();
+      this.metaobjectDefinitions = await this.getAllMetaobjectDefinitions();
+
+      // Créer les metafield definitions dans la boutique cible
+      await this.duplicateMetafieldDefinitions();
+
+      // Créer les metaobject definitions dans la boutique cible
+      /* await this.duplicateMetaobjectDefinitions(); */
+
+    } catch (error) {
+      this.logMessage('error', `Erreur lors de l'initialisation: ${error.message}`);
+    }
+  }
+  logMessage(type, message) {
+    console.log(`[${type}] ${message}`);
+  }
+  async getAllMetafieldDefinitions() {
+    let allDefinitions = [];
+    this.logMessage('info', 'Début de la récupération des définitions de metafields...');
     
-    // Récupération des metafield definitions
-    const metafieldDefinitions = await getAllMetafieldDefinitions();
-    console.log(`✅ ${metafieldDefinitions.length} définitions de metafields récupérées`);
+    for (const ownerType of this.metafieldsOwnerTypes) {
+      let definitions = [];
+      let hasNextPage = true;
+      let cursor = null;
+      this.logMessage('info', `Traitement des metafields pour le type: ${ownerType}`);
+  
+      while (hasNextPage) {
+        const response = await this.sourceClient.request(GET_METAFIELD_DEFINITIONS, { 
+          after: cursor,
+          ownerType: ownerType 
+        });
+        const newDefinitions = response.metafieldDefinitions.edges.map(edge => edge.node);
+        definitions = definitions.concat(newDefinitions);
+        this.logMessage('success', `${newDefinitions.length} définitions récupérées pour ${ownerType}`);
+        
+        hasNextPage = response.metafieldDefinitions.pageInfo.hasNextPage;
+        cursor = response.metafieldDefinitions.pageInfo.endCursor;
+      }
+  
+      this.logMessage('success', `Total pour ${ownerType}: ${definitions.length} définitions`);
+      allDefinitions = allDefinitions.concat(definitions);
+    }
+  
+    this.logMessage('info', `Total final: ${allDefinitions.length} définitions de metafields`);
+    if (allDefinitions.length > 0) {
+      this.logMessage('info', `Exemple de définition: ${JSON.stringify(allDefinitions[0], null, 2)}`);
+    }
+    return allDefinitions;
+  }
+  async getAllMetaobjectDefinitions() {
+    this.logMessage('info', '\n🚀 Début de la récupération des définitions de metaobjects...');
+    let definitions = [];
+    let hasNextPage = true;
+    let cursor = null;
+  
+    while (hasNextPage) {
+      const response = await this.sourceClient.request(GET_METAOBJECT_DEFINITIONS, { after: cursor });
+      const newDefinitions = response.metaobjectDefinitions.edges.map(edge => edge.node);
+      definitions = definitions.concat(newDefinitions);
+      hasNextPage = response.metaobjectDefinitions.pageInfo.hasNextPage;
+      cursor = response.metaobjectDefinitions.pageInfo.endCursor;
+    }
+  
+    this.logMessage('success', `\n🎉 Total: ${definitions.length} définitions de metaobjects`);
+    this.logMessage('info', '📝 Liste complète des types:', definitions.map(def => def.type).join(', '));
+    return definitions;
+  }
+  async duplicateMetafieldDefinitions() {
+    if (this.metafieldDefinitions.length === 0) {
+      this.logMessage('error', 'Aucune définition de metafield sur la boutique source trouvée');
+      return;
+    }
+    try {
+      this.logMessage('info', '\n🔄 Début de la duplication des metafield definitions...');
+      
+      for (const def of this.metafieldDefinitions) {
+        if (def.ownerType === 'COLLECTION') {
+          this.logMessage('info', `Création de la définition: ${def.namespace}.${def.key} (${def.ownerType})`);
+          this.logMessage('info', def);
+          // Gestion spéciale pour les types list.collection
+          let validations = def.validations || null;
+          if (def.type.name.includes('metaobject_reference')) {
+            this.logMessage('info', `Type metaobject_reference détecté pour ${def.namespace}.${def.key}`);
+            
+            const matchingDefinition = this.metaobjectDefinitions.find(metaobj => {
+              const fieldKey = def.key.toLowerCase();
+              const metaobjectType = metaobj.type.toLowerCase();
+              return fieldKey.includes(metaobjectType);
+            });
 
-    // Récupération des metaobject definitions
-    const metaobjectDefinitions = await getAllMetaobjectDefinitions();
-    console.log(`✅ ${metaobjectDefinitions.length} définitions de metaobjects récupérées`);
+            if (!matchingDefinition) {
+              this.logMessage('error', `Aucun metaobject trouvé pour ${def.namespace}.${def.key}`);
+              continue;
+            }
 
-    // Création de l'objet final
-    const definitions = {
-      metafields: metafieldDefinitions.map(def => ({
-        name: def.name,
-        namespace: def.namespace,
-        key: def.key,
-        description: def.description,
-        type: def.type.name,
-        ownerType: def.ownerType,
-        validations: def.validations || []
-      })),
-      metaobjects: metaobjectDefinitions.map(def => ({
-        name: def.name,
-        type: def.type,
-        fieldDefinitions: def.fieldDefinitions.map(field => ({
-          name: field.name,
-          key: field.key,
-          type: field.type.name,
-          required: field.required,
-          validations: field.validations || []
-        }))
-      }))
-    };
+            // Vérifier si c'est une liste ou une référence simple
+            if (def.type.name.includes('list.')) {
+              validations = [{
+                name: 'metaobject_definition_ids',
+                value: JSON.stringify([matchingDefinition.id]) // Pour une liste, on doit envoyer un tableau JSON stringifié
+              }];
+            } else {
+              validations = [{
+                name: 'metaobject_definition_id',
+                value: matchingDefinition.id // Pour une référence simple, on envoie l'ID directement
+              }];
+            }
 
-    // Écriture du fichier
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `definitions_export_${timestamp}.json`;
-    fs.writeFileSync(fileName, JSON.stringify(definitions, null, 2));
-    console.log(`\n✨ Export terminé ! Fichier généré : ${fileName}`);
-
-    // Afficher quelques statistiques
-    console.log('\n📊 Statistiques :');
-    console.log(`- ${definitions.metafields.length} définitions de metafields`);
-    console.log(`- ${definitions.metaobjects.length} définitions de metaobjects`);
-    console.log(`- Types de metaobjects : ${definitions.metaobjects.map(d => d.type).join(', ')}`);
-
-  } catch (error) {
-    console.error('❌ Erreur lors de l\'export:', error);
+            this.logMessage('info', `Validation configurée pour ${def.namespace}.${def.key}:`, JSON.stringify(validations));
+          }
+  
+          const variables = {
+            definition: {
+              name: def.name,
+              namespace: def.namespace,
+              key: def.key,
+              description: def.description,
+              type: def.type.name,
+              ownerType: def.ownerType,
+              validations: validations
+            }
+          };
+  
+          this.logMessage('info', `Variables pour ${def.namespace}.${def.key}:`);
+          this.logMessage('info', JSON.stringify(variables, null, 2));
+          
+          try {
+            const result = await this.targetClient.request(CREATE_METAFIELD_DEFINITION, variables);
+            if (result?.metafieldDefinitionCreate?.userErrors?.length > 0) {
+              this.logMessage('error', `Erreur pour ${def.namespace}.${def.key}:`);
+              result.metafieldDefinitionCreate.userErrors.forEach(error => {
+                this.logMessage('error', `- ${error.message}`);
+              });
+            } else {
+              this.logMessage('success', `Définition créée avec succès: ${def.namespace}.${def.key}`);
+            }
+          } catch (error) {
+            this.logMessage('error', `Erreur lors de la création de ${def.namespace}.${def.key}:`);
+            this.logMessage('error', error.message);
+            if (error.response?.errors) {
+              this.logMessage('error', `Erreurs GraphQL: ${JSON.stringify(error.response.errors, null, 2)}`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      this.logMessage('error', `Erreur globale: ${error.message}`);
+    }
   }
 }
 
-// Fonction pour importer et créer les définitions
-async function importDefinitions(filePath) {
-  try {
-    console.log(`🚀 Début de l'import depuis ${filePath}...`);
-    
-    // Lecture du fichier
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    
-    // Création des metafield definitions
-    console.log('\n📝 Création des metafield definitions...');
-    for (const def of data.metafields) {
-      try {
-        const variables = {
-          definition: {
-            name: def.name,
-            namespace: def.namespace,
-            key: def.key,
-            description: def.description,
-            type: def.type,
-            ownerType: def.ownerType,
-            validations: def.validations
-          }
-        };
-        
-        const result = await targetClient.request(CREATE_METAFIELD_DEFINITION, variables);
-        if (result.metafieldDefinitionCreate.userErrors.length > 0) {
-          console.log(`  ⚠️ Erreur pour ${def.namespace}.${def.key}:`, result.metafieldDefinitionCreate.userErrors);
-        } else {
-          console.log(`  ✅ Metafield définition créée: ${def.namespace}.${def.key}`);
-        }
-      } catch (error) {
-        console.error(`  ❌ Erreur pour ${def.namespace}.${def.key}:`, error.message);
-      }
-    }
-
-    // Création des metaobject definitions
-    console.log('\n📝 Création des metaobject definitions...');
-    for (const def of data.metaobjects) {
-      try {
-        const variables = {
-          definition: {
-            name: def.name,
-            type: def.type,
-            fieldDefinitions: def.fieldDefinitions
-          }
-        };
-        
-        const result = await targetClient.request(CREATE_METAOBJECT_DEFINITION, variables);
-        if (result.metaobjectDefinitionCreate.userErrors.length > 0) {
-          console.log(`  ⚠️ Erreur pour ${def.type}:`, result.metaobjectDefinitionCreate.userErrors);
-        } else {
-          console.log(`  ✅ Metaobject définition créée: ${def.type}`);
-        }
-      } catch (error) {
-        console.error(`  ❌ Erreur pour ${def.type}:`, error.message);
-      }
-    }
-
-    console.log('\n✨ Import terminé !');
-
-  } catch (error) {
-    console.error('❌ Erreur lors de l\'import:', error);
-  }
-}
-
-// Lancer la migration
-duplicateMetafieldDefinitions();
+// Créer une instance de la classe
+new ManageMeta(process.env.SOURCE_STORE_NAME, process.env.SOURCE_ACCESS_TOKEN, process.env.TARGET_STORE_NAME, process.env.TARGET_ACCESS_TOKEN, process.env.API_VERSION);
