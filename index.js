@@ -192,6 +192,7 @@ async function duplicateMetafieldDefinitions() {
     console.log('\n🔄 Début de la duplication des metafield definitions...');
     
     for (const def of definitions) {
+      if (def.ownerType === 'COLLECTION') {
       console.log(`  ⏳ Création de la définition: ${def.namespace}.${def.key} (${def.ownerType})`);
       const variables = {
         definition: {
@@ -204,6 +205,7 @@ async function duplicateMetafieldDefinitions() {
           validations: def.validations
         }
       };
+      console.log(variables);
       
       try {
         const result = await targetClient.request(CREATE_METAFIELD_DEFINITION, variables);
@@ -214,6 +216,7 @@ async function duplicateMetafieldDefinitions() {
         }
       } catch (error) {
         console.error(`  ❌ Erreur lors de la création de ${def.namespace}.${def.key}:`, error.message);
+      }
       }
     }
   } catch (error) {
@@ -554,264 +557,5 @@ async function importDefinitions(filePath) {
   }
 }
 
-async function migrateShopifyData() {
-  try {
-    console.log('🚀 Début de la migration complète...');
-    
-    // 1. Export des définitions dans un fichier JSON
-    console.log('\n📦 Étape 1: Export des définitions...');
-    const definitions = {
-      metafields: await getAllMetafieldDefinitions(),
-      metaobjects: await getAllMetaobjectDefinitions()
-    };
-
-    // Sauvegarde dans un fichier JSON
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `full_export_${timestamp}.json`;
-    fs.writeFileSync(fileName, JSON.stringify(definitions, null, 2));
-    console.log(`✅ Définitions exportées dans ${fileName}`);
-
-    // 2. Création des définitions sur la boutique cible
-    console.log('\n📝 Étape 2: Création des définitions sur la boutique cible...');
-    
-    // 2.1 Création des metafield definitions
-    console.log('\n  2.1 Création des metafield definitions...');
-    for (const def of definitions.metafields) {
-      try {
-        const variables = {
-          definition: {
-            name: def.name,
-            namespace: def.namespace,
-            key: def.key,
-            description: def.description,
-            type: def.type.name,
-            ownerType: def.ownerType,
-            validations: def.validations || []
-          }
-        };
-        
-        const result = await targetClient.request(CREATE_METAFIELD_DEFINITION, variables);
-        if (result.metafieldDefinitionCreate.userErrors.length > 0) {
-          const errors = result.metafieldDefinitionCreate.userErrors;
-          if (errors.some(e => e.message.includes('Key is in use'))) {
-            console.log(`  ℹ️ La définition ${def.namespace}.${def.key} existe déjà`);
-            continue;
-          }
-          console.log(`  ⚠️ Erreur pour ${def.namespace}.${def.key}:`, errors);
-        } else {
-          console.log(`  ✅ Metafield définition créée: ${def.namespace}.${def.key}`);
-        }
-      } catch (error) {
-        console.error(`  ❌ Erreur pour ${def.namespace}.${def.key}:`, error.message);
-      }
-    }
-
-    // 2.2 Création des structures de metaobject definitions
-    console.log('\n  2.2 Création des structures de metaobject definitions...');
-    for (const def of definitions.metaobjects) {
-      try {
-        const variables = {
-          definition: {
-            name: def.name,
-            type: def.type,
-            description: def.description,
-            access: {
-              storefront: "PUBLIC_READ"
-            },
-            capabilities: {
-              publishable: {
-                enabled: true
-              }
-            },
-            fieldDefinitions: [] // Structure vide
-          }
-        };
-        
-        const result = await targetClient.request(CREATE_METAOBJECT_DEFINITION, variables);
-        if (result.metaobjectDefinitionCreate.userErrors.length > 0) {
-          const errors = result.metaobjectDefinitionCreate.userErrors;
-          if (errors.some(e => e.message === 'Type has already been taken')) {
-            console.log(`  ℹ️ La définition ${def.type} existe déjà`);
-            continue;
-          }
-          console.log(`  ⚠️ Erreur pour ${def.type}:`, errors);
-        } else {
-          console.log(`  ✅ Structure créée: ${def.type}`);
-        }
-      } catch (error) {
-        console.error(`  ❌ Erreur pour ${def.type}:`, error.message);
-      }
-    }
-
-    // 2.3 Ajout des champs aux metaobject definitions
-    console.log('\n🔄 Début de la mise à jour des définitions de metaobjects...');
-    const targetDefinitions = await targetClient.request(GET_METAOBJECT_DEFINITIONS_IDS);
-
-    console.log('\n📋 Metaobjects disponibles dans la boutique cible :');
-    targetDefinitions.metaobjectDefinitions.edges.forEach(edge => {
-      console.log(`  - ${edge.node.name} (type: ${edge.node.type}, id: ${edge.node.id})`);
-    });
-
-    const targetDefinitionsMap = new Map(
-      targetDefinitions.metaobjectDefinitions.edges.map(edge => [edge.node.type, edge.node.id])
-    );
-
-    for (const def of definitions.metaobjects) {
-      console.log(`\n\n🔍 Traitement du metaobjet : ${def.name} (type: ${def.type})`);
-      const definitionId = targetDefinitionsMap.get(def.type);
-      if (!definitionId) {
-        console.log(`  ⚠️ Pas d'ID trouvé pour ce type de metaobjet`);
-        continue;
-      }
-
-      try {
-        console.log(`\n  📝 Liste des champs à créer :`);
-        def.fieldDefinitions.forEach(field => {
-          if (field.type.name.includes('metaobject_reference') || field.type.name.includes('mixed_reference')) {
-            console.log(`    - ${field.name} (type: ${field.type.name}) ⭐`);
-          } else {
-            console.log(`    - ${field.name} (type: ${field.type.name})`);
-          }
-        });
-
-        const updateVariables = {
-          id: definitionId,
-          definition: {
-            fieldDefinitions: def.fieldDefinitions.map(field => {
-              if (field.type.name.includes('metaobject_reference') || field.type.name.includes('mixed_reference')) {
-                console.log(`\n  🔗 Configuration de la référence pour le champ "${field.name}" :
-    - Clé : ${field.key}
-    - Type : ${field.type.name}`);
-
-                // Chercher le metaobjet en gérant le cas singulier/pluriel
-                const matchingDefinition = targetDefinitions.metaobjectDefinitions.edges.find(edge => {
-                  const fieldKey = field.key.toLowerCase();
-                  const metaobjectType = edge.node.type.toLowerCase();
-                  
-                  return fieldKey === metaobjectType || // Égalité exacte
-                         (fieldKey === `${metaobjectType}s`) || // Pluriel simple
-                         (fieldKey.slice(0, -1) === metaobjectType); // Du pluriel vers le singulier
-                });
-
-                if (matchingDefinition) {
-                  console.log(`    ✅ Metaobjet cible trouvé :
-    - Nom du champ : ${field.name}
-    - Clé du champ : ${field.key}
-    - Type du metaobjet : ${matchingDefinition.node.type}
-    - ID : ${matchingDefinition.node.id}`);
-
-                  if (field.type.name.includes('metaobject_reference')) {
-                    return {
-                      create: {
-                        name: field.name,
-                        key: field.key,
-                        type: field.type.name,
-                        required: field.required,
-                        validations: [{
-                          name: 'metaobject_definition_id',
-                          value: matchingDefinition.node.id
-                        }]
-                      }
-                    };
-                  } else {
-                    return {
-                      create: {
-                        name: field.name,
-                        key: field.key,
-                        type: field.type.name,
-                        required: field.required,
-                        validations: [{
-                          name: 'metaobject_definition_ids',
-                          value: JSON.stringify([matchingDefinition.node.id])
-                        }]
-                      }
-                    };
-                  }
-                } else {
-                  console.log(`    ❌ Aucun metaobjet cible trouvé pour le champ "${field.name}"`);
-                }
-              }
-              
-              return {
-                create: {
-                  name: field.name,
-                  key: field.key,
-                  description: field.description,
-                  type: field.type.name,
-                  required: field.required,
-                  validations: field.validations || []
-                }
-              };
-            })
-          }
-        };
-
-        const result = await targetClient.request(UPDATE_METAOBJECT_DEFINITION, updateVariables);
-        if (result.metaobjectDefinitionUpdate.userErrors.length > 0) {
-          console.log(`\n  ℹ️ Résultat de la mise à jour :`);
-          for (const error of result.metaobjectDefinitionUpdate.userErrors) {
-            if (error.message.includes('is already taken')) {
-              const fieldName = error.message.split('"')[1];
-              console.log(`    ℹ️ Le champ "${fieldName}" existe déjà dans la définition`);
-              
-              // Trouver le champ source avec sa description
-              const sourceField = def.fieldDefinitions.find(f => f.key === fieldName);
-              if (sourceField?.description) {
-                try {
-                  // Mise à jour de la description du champ existant
-                  const updateResult = await targetClient.request(UPDATE_METAOBJECT_DEFINITION, {
-                    id: definitionId,
-                    definition: {
-                      fieldDefinitions: [{
-                        update: {
-                          key: fieldName,
-                          description: sourceField.description
-                        }
-                      }]
-                    }
-                  });
-                  
-                  if (updateResult.metaobjectDefinitionUpdate.userErrors.length === 0) {
-                    console.log(`      ✅ Description mise à jour pour le champ "${fieldName}"`);
-                  } else {
-                    console.log(`      ⚠️ Impossible de mettre à jour la description du champ "${fieldName}"`);
-                  }
-                } catch (updateError) {
-                  console.log(`      ❌ Erreur lors de la mise à jour de la description : ${updateError.message}`);
-                }
-              }
-            } else {
-              console.log(`    ⚠️ ${error.message}`);
-            }
-          }
-        } else {
-          console.log(`\n  ✅ Tous les champs ont été ajoutés avec succès`);
-        }
-      } catch (error) {
-        console.error(`\n  ❌ Erreur lors de la mise à jour :`, error.message);
-      }
-    }
-
-    console.log('\n Migration terminée !');
-    console.log(`📋 Récapitulatif des données exportées dans ${fileName}`);
-   /*  // 3. Copie des valeurs
-    console.log('\n📝 Étape 3: Copie des valeurs...');
-    
-    // 3.1 Copie des metafields
-    await copyMetafieldValues();
-    
-    // 3.2 Copie des metaobjects
-    await copyMetaobjectValues();
-
-    console.log('\n🎉 Migration terminée !');
-    console.log(`📋 Récapitulatif des données exportées dans ${fileName}`);
-    console.log(`- ${definitions.metafields.length} définitions de metafields`);
-    console.log(`- ${definitions.metaobjects.length} définitions de metaobjects`); */
-
-  } catch (error) {
-    console.error('❌ Erreur lors de la migration:', error);
-  }
-}
-
 // Lancer la migration
-migrateShopifyData(); 
+duplicateMetafieldDefinitions();
