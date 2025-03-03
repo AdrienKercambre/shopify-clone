@@ -170,8 +170,8 @@ class ManageMeta {
 
       // Créer les metaobject definitions dans la boutique cible
       await this.duplicateMetaobjectDefinitions();
-      /* // Créer les metafield definitions dans la boutique cible
-      await this.duplicateMetafieldDefinitions(); */
+      // Créer les metafield definitions dans la boutique cible
+      await this.duplicateMetafieldDefinitions();
 
     } catch (error) {
       this.logMessage('error', `Erreur lors de l'initialisation: ${error.message}`);
@@ -232,81 +232,101 @@ class ManageMeta {
     return definitions;
   }
   async duplicateMetafieldDefinitions() {
-    if (this.metafieldDefinitions.length === 0) {
-      this.logMessage('error', 'Aucune définition de metafield sur la boutique source trouvée');
-      return;
-    }
+    this.logMessage('info', 'Début de la duplication des metafield definitions...');
     try {
-      this.logMessage('info', '\n🔄 Début de la duplication des metafield definitions...');
+      if (!this.sourceMetafieldDefinitions?.length) {
+        this.logMessage('error', 'Aucune définition de metafield sur la boutique source trouvée');
+        return;
+      }
       
-      for (const def of this.metafieldDefinitions) {
-        if (def.ownerType === 'COLLECTION') {
-          this.logMessage('info', `Création de la définition: ${def.namespace}.${def.key} (${def.ownerType})`);
-          this.logMessage('info', def);
-          // Gestion spéciale pour les types list.collection
-          let validations = def.validations || null;
-          if (def.type.name.includes('metaobject_reference')) {
-            this.logMessage('info', `Type metaobject_reference détecté pour ${def.namespace}.${def.key}`);
-            
-            const matchingDefinition = this.metaobjectDefinitions.find(metaobj => {
-              const fieldKey = def.key.toLowerCase();
-              const metaobjectType = metaobj.type.toLowerCase();
-              return fieldKey.includes(metaobjectType);
-            });
-
-            if (!matchingDefinition) {
-              this.logMessage('error', `Aucun metaobject trouvé pour ${def.namespace}.${def.key}`);
-              continue;
-            }
-
-
-            validations = [{
-              name: 'metaobject_definition_id',
-              value: matchingDefinition.node.id
-            }];
-            console.log("ICI TEST",validations, matchingDefinition);
-
-            this.logMessage('info', `Validation configurée pour ${def.namespace}.${def.key}:`, JSON.stringify(validations));
-          }
-  
-          const variables = {
-            definition: {
-              name: def.name,
-              namespace: def.namespace,
-              key: def.key,
-              description: def.description,
-              type: def.type.name,
-              ownerType: def.ownerType,
-              validations: validations
-            }
-          };
-  
-          this.logMessage('info', `Variables pour ${def.namespace}.${def.key}:`);
-          this.logMessage('info', JSON.stringify(variables, null, 2));
-          
-          try {
-            const result = await this.targetClient.request(CREATE_METAFIELD_DEFINITION, variables);
-            if (result?.metafieldDefinitionCreate?.userErrors?.length > 0) {
-              this.logMessage('error', `Erreur pour ${def.namespace}.${def.key}:`);
-              result.metafieldDefinitionCreate.userErrors.forEach(error => {
-                this.logMessage('error', `- ${error.message}`);
-              });
-            } else {
-              this.logMessage('success', `Définition créée avec succès: ${def.namespace}.${def.key}`);
-            }
-          } catch (error) {
-            this.logMessage('error', `Erreur lors de la création de ${def.namespace}.${def.key}:`);
-            this.logMessage('error', error.message);
-            if (error.response?.errors) {
-              this.logMessage('error', `Erreurs GraphQL: ${JSON.stringify(error.response.errors, null, 2)}`);
-            }
-          }
-        }
+      for (const defMetafield of this.sourceMetafieldDefinitions.filter(def => def.ownerType === 'COLLECTION')) {
+        await this.createMetafieldDefinition(defMetafield);
       }
     } catch (error) {
       this.logMessage('error', `Erreur globale: ${error.message}`);
     }
   }
+
+  async createMetafieldDefinition(def) {
+    try {
+      this.logMessage('info', `Création de la définition du metafield: ${def.namespace}.${def.key} (${def.ownerType})`);
+      
+      const validations = await this.getMetafieldValidations(def);
+      const variables = this.buildMetafieldVariables(def, validations);
+      
+      await this.sendMetafieldCreationRequest(variables, def);
+    } catch (error) {
+      this.logMessage('error', `Erreur pour ${def.namespace}.${def.key}: ${error.message}`);
+    }
+  }
+
+  async getMetafieldValidations(def) {
+    let validations = def.validations || null;
+
+    if (def.type.name.includes('metaobject_reference')) {
+      this.logMessage('info', `Type metaobject_reference détecté pour ${def.namespace}.${def.key}`);
+      
+      const matchingDefinition = this.findMatchingMetaobjectForMetafield(def);
+      if (!matchingDefinition) {
+        throw new Error(`Aucun metaobject trouvé pour ${def.namespace}.${def.key}`);
+      }
+
+      validations = [{
+        name: 'metaobject_definition_id',
+        value: matchingDefinition.id
+      }];
+
+      this.logMessage('info', `Validation configurée pour ${def.namespace}.${def.key}: ${JSON.stringify(validations)}`);
+    }
+
+    return validations;
+  }
+
+  findMatchingMetaobjectForMetafield(def) {
+    return this.targetMetaobjectDefinitions.find(metaobj => {
+      const fieldKey = def.key.toLowerCase();
+      const metaobjectType = metaobj.type.toLowerCase();
+      return fieldKey.includes(metaobjectType);
+    });
+  }
+
+  buildMetafieldVariables(def, validations) {
+    const variables = {
+      definition: {
+        name: def.name,
+        namespace: def.namespace,
+        key: def.key,
+        description: def.description,
+        type: def.type.name,
+        ownerType: def.ownerType,
+        validations: validations
+      }
+    };
+
+    this.logMessage('info', `Variables pour ${def.namespace}.${def.key}: ${JSON.stringify(variables, null, 2)}`);
+    return variables;
+  }
+
+  async sendMetafieldCreationRequest(variables, def) {
+    try {
+      const result = await this.targetClient.request(CREATE_METAFIELD_DEFINITION, variables);
+      
+      if (result?.metafieldDefinitionCreate?.userErrors?.length > 0) {
+        this.logMessage('error', `Erreur pour ${def.namespace}.${def.key}:`);
+        result.metafieldDefinitionCreate.userErrors.forEach(error => {
+          this.logMessage('error', `- ${error.message}`);
+        });
+      } else {
+        this.logMessage('success', `Définition créée avec succès: ${def.namespace}.${def.key}`);
+      }
+    } catch (error) {
+      if (error.response?.errors) {
+        this.logMessage('error', `Erreurs GraphQL: ${JSON.stringify(error.response.errors, null, 2)}`);
+      }
+      throw error;
+    }
+  }
+
   async duplicateMetaobjectDefinitions() {
     try {
       this.logMessage('info', 'Début de la duplication des metaobject definitions');
