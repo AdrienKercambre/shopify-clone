@@ -171,7 +171,7 @@ class ManageMeta {
       // Créer les metaobject definitions dans la boutique cible
       await this.duplicateMetaobjectDefinitions();
       // Créer les metafield definitions dans la boutique cible
-      //await this.duplicateMetafieldDefinitions();
+      await this.duplicateMetafieldDefinitions();
 
     } catch (error) {
       this.logMessage('error', `Erreur lors de l'initialisation: ${error.message}`);
@@ -376,10 +376,6 @@ class ManageMeta {
   async addFieldsToMetaobjects() {
     for (const sourceDef of this.sourceMetaobjectDefinitions) {
       try {
-        // On ne gère que les metaobjects de type 'sale' pour le moment
-        if (sourceDef.type !== 'sale') {
-          continue;
-        }
         const targetDef = this.targetMetaobjectDefinitions.find(targetDef => targetDef.type === sourceDef.type);
         if (!targetDef.id) {
           this.logMessage('warning', `Pas d'ID trouvé pour ${targetDef.type}`);
@@ -491,171 +487,114 @@ class ManageMeta {
   }
   async updateMetaobjectFields(definitionId, fieldDefinitions) {
     try {
-      this.logMessage('info', `\n=== DÉBUT DE LA MISE À JOUR DES CHAMPS ===`);
-      this.logMessage('info', `ID de définition: ${definitionId}`);
-      this.logMessage('info', `Nombre de champs reçus: ${fieldDefinitions.length}`);
+      this.logMessage('info', '\n=== DÉBUT DE LA MISE À JOUR DES CHAMPS ===');
       
-      // 1. Récupération des champs existants
-      this.logMessage('info', `\n1. RÉCUPÉRATION DES CHAMPS EXISTANTS`);
+      // 1. Récupérer les champs existants et les séparer
       const existingFields = await this.getExistingFields(definitionId);
-      this.logMessage('info', `Champs existants: ${JSON.stringify(existingFields, null, 2)}`);
-      
-      // 2. Séparation des champs
-      this.logMessage('info', `\n2. SÉPARATION DES CHAMPS`);
       const { fieldsToCreate, fieldsToUpdate } = this.separateFields(fieldDefinitions, existingFields);
-      this.logMessage('info', `Nombre de champs à créer: ${fieldsToCreate.length}`);
-      this.logMessage('info', `Nombre de champs à mettre à jour: ${fieldsToUpdate.length}`);
       
-      // 3. Récupération des metaobjects de la cible
-      this.logMessage('info', `\n3. RÉCUPÉRATION DES METAOBJECTS CIBLES`);
-      const targetMetaobjectsResponse = await this.targetClient.request(GET_METAOBJECT_DEFINITIONS_IDS);
-      const targetMetaobjects = targetMetaobjectsResponse.metaobjectDefinitions.edges;
-      this.logMessage('info', `Metaobjects cibles disponibles:`);
-      targetMetaobjects.forEach(edge => {
-        this.logMessage('info', `- Type: ${edge.node.type}, ID: ${edge.node.id}`);
-      });
+      // 2. Mettre à jour les validations avec les bons IDs
+      const targetMetaobjects = await this.getAllMetaobjectDefinitions(this.targetClient);
+      const updatedFieldsToCreate = this.updateMetaobjectValidations(fieldsToCreate, targetMetaobjects);
+      const updatedFieldsToUpdate = this.updateMetaobjectValidations(fieldsToUpdate, targetMetaobjects);
       
-      // 4. Mise à jour des IDs dans les validations
-      this.logMessage('info', `\n4. MISE À JOUR DES VALIDATIONS`);
+      // 3. Construire et envoyer la requête
+      const variables = this.buildUpdateVariables(definitionId, updatedFieldsToCreate, updatedFieldsToUpdate);
+      await this.sendUpdateRequest(variables);
       
-      // Pour les champs à créer
-      this.logMessage('info', `\n4.1 TRAITEMENT DES CHAMPS À CRÉER`);
-      const updatedFieldsToCreate = fieldsToCreate.map(field => {
-        this.logMessage('info', `\nTraitement du champ: ${field.create.key}`);
-        this.logMessage('info', `Type: ${field.create.type}`);
-        this.logMessage('info', `Validations actuelles: ${JSON.stringify(field.create.validations, null, 2)}`);
-        
-        if (field.create.validations?.some(v => 
-          v.name === 'metaobject_definition_id' || 
-          v.name === 'metaobject_definition_ids'
-        )) {
-          this.logMessage('info', `Le champ a des validations de type metaobject`);
-          
-          const matchingTargetMetaobject = targetMetaobjects.find(edge => {
-            const fieldKey = field.create.key.toLowerCase();
-            const metaobjectType = edge.node.type.toLowerCase();
-            const isMatch = fieldKey === metaobjectType || 
-                   fieldKey === `${metaobjectType}s` || 
-                   fieldKey.slice(0, -1) === metaobjectType || 
-                   `${fieldKey}s` === metaobjectType;
-            this.logMessage('info', `Comparaison: ${fieldKey} avec ${metaobjectType} => ${isMatch}`);
-            return isMatch;
-          });
-
-          if (matchingTargetMetaobject) {
-            this.logMessage('info', `Correspondance trouvée: ${matchingTargetMetaobject.node.type}`);
-            field.create.validations = field.create.validations.map(v => {
-              if (v.name === 'metaobject_definition_id' || v.name === 'metaobject_definition_ids') {
-                const newValidation = {
-                  name: v.name,
-                  value: v.name === 'metaobject_definition_ids' 
-                    ? JSON.stringify([matchingTargetMetaobject.node.id])
-                    : matchingTargetMetaobject.node.id
-                };
-                this.logMessage('info', `Nouvelle validation: ${JSON.stringify(newValidation, null, 2)}`);
-                return newValidation;
-              }
-              return v;
-            });
-          } else {
-            this.logMessage('warning', `Aucune correspondance trouvée pour ${field.create.key}`);
-          }
-        }
-        return field;
-      });
-
-      // Pour les champs à mettre à jour
-      this.logMessage('info', `\n4.2 TRAITEMENT DES CHAMPS À METTRE À JOUR`);
-      const updatedFieldsToUpdate = fieldsToUpdate.map(field => {
-        this.logMessage('info', `\nTraitement du champ existant: ${field.create.key}`);
-        this.logMessage('info', `Type: ${field.create.type}`);
-        this.logMessage('info', `Validations actuelles: ${JSON.stringify(field.create.validations, null, 2)}`);
-
-        // Si le champ a des validations de type metaobject
-        if (field.create.validations?.some(v => 
-          v.name === 'metaobject_definition_id' || 
-          v.name === 'metaobject_definition_ids'
-        )) {
-          this.logMessage('info', `Le champ a des validations de type metaobject`);
-          
-          const matchingTargetMetaobject = targetMetaobjects.find(edge => {
-            const fieldKey = field.create.key.toLowerCase();
-            const metaobjectType = edge.node.type.toLowerCase();
-            const isMatch = fieldKey === metaobjectType || 
-                   fieldKey === `${metaobjectType}s` || 
-                   fieldKey.slice(0, -1) === metaobjectType || 
-                   `${fieldKey}s` === metaobjectType;
-            this.logMessage('info', `Comparaison: ${fieldKey} avec ${metaobjectType} => ${isMatch}`);
-            return isMatch;
-          });
-
-          if (matchingTargetMetaobject) {
-            this.logMessage('info', `Correspondance trouvée: ${matchingTargetMetaobject.node.type}`);
-            field.create.validations = field.create.validations.map(v => {
-              if (v.name === 'metaobject_definition_id' || v.name === 'metaobject_definition_ids') {
-                const newValidation = {
-                  name: v.name,
-                  value: v.name === 'metaobject_definition_ids' 
-                    ? JSON.stringify([matchingTargetMetaobject.node.id])
-                    : matchingTargetMetaobject.node.id
-                };
-                this.logMessage('info', `Nouvelle validation: ${JSON.stringify(newValidation, null, 2)}`);
-                return newValidation;
-              }
-              return v;
-            });
-          } else {
-            this.logMessage('warning', `Aucune correspondance trouvée pour ${field.create.key}`);
-          }
-        }
-        return field;
-      });
-
-      // 5. Construction des variables
-      this.logMessage('info', `\n5. CONSTRUCTION DES VARIABLES FINALES`);
-      const variables = {
-        id: definitionId,
-        definition: {
-          fieldDefinitions: [
-            ...updatedFieldsToCreate.map(field => {
-              this.logMessage('info', `Champ à créer: ${field.create.key}`);
-              return { create: field.create };
-            }),
-            ...updatedFieldsToUpdate.map(field => {
-              this.logMessage('info', `Champ à mettre à jour: ${field.create.key}`);
-              return {
-                update: {
-                  key: field.create.key,
-                  description: field.create.description,
-                  required: field.create.required,
-                  validations: field.create.validations
-                }
-              };
-            })
-          ]
-        }
-      };
-
-      this.logMessage('info', `\n6. ENVOI À L'API`);
-      this.logMessage('info', `Variables finales: ${JSON.stringify(variables, null, 2)}`);
-
-      const result = await this.targetClient.request(UPDATE_METAOBJECT_DEFINITION, variables);
-
-      if (result.metaobjectDefinitionUpdate.userErrors.length > 0) {
-        this.logMessage('warning', `\n❌ ERREURS DÉTECTÉES`);
-        for (const error of result.metaobjectDefinitionUpdate.userErrors) {
-          this.logMessage('warning', `Erreur: ${error.message}`);
-          this.logMessage('warning', `Champ en erreur: ${error.field}`);
-          this.logMessage('warning', `Code d'erreur: ${error.code}`);
-        }
-      } else {
-        this.logMessage('success', `\n✅ Mise à jour réussie`);
-      }
     } catch (error) {
       this.logMessage('error', `\n❌ ERREUR GLOBALE: ${error.message}`);
       if (error.response?.errors) {
         this.logMessage('error', `Erreurs GraphQL: ${JSON.stringify(error.response.errors, null, 2)}`);
       }
+    }
+  }
+
+  updateMetaobjectValidations(fields, targetMetaobjects) {
+    return fields.map(field => {
+      if (!this.hasMetaobjectValidations(field)) return field;
+
+      const matchingMetaobject = this.findMatchingMetaobject(field.create.key, targetMetaobjects);
+      if (!matchingMetaobject) {
+        this.logMessage('warning', `Pas de correspondance trouvée pour ${field.create.key}`);
+        return field;
+      }
+
+      return this.updateFieldValidations(field, matchingMetaobject);
+    });
+  }
+
+  hasMetaobjectValidations(field) {
+    return field.create.validations?.some(v => 
+      v.name === 'metaobject_definition_id' || 
+      v.name === 'metaobject_definition_ids'
+    );
+  }
+
+  findMatchingMetaobject(fieldKey, targetMetaobjects) {
+    return targetMetaobjects.find(edge => {
+      const key = fieldKey.toLowerCase();
+      const type = edge.node.type.toLowerCase();
+      return key === type || 
+             key === `${type}s` || 
+             key.slice(0, -1) === type || 
+             `${key}s` === type;
+    });
+  }
+
+  updateFieldValidations(field, matchingMetaobject) {
+    const updatedValidations = field.create.validations.map(v => {
+      if (v.name === 'metaobject_definition_id' || v.name === 'metaobject_definition_ids') {
+        return {
+          name: v.name,
+          value: v.name === 'metaobject_definition_ids' 
+            ? JSON.stringify([matchingMetaobject.node.id])
+            : matchingMetaobject.node.id
+        };
+      }
+      return v;
+    });
+
+    return {
+      create: {
+        ...field.create,
+        validations: updatedValidations
+      }
+    };
+  }
+
+  buildUpdateVariables(definitionId, fieldsToCreate, fieldsToUpdate) {
+    return {
+      id: definitionId,
+      definition: {
+        fieldDefinitions: [
+          ...fieldsToCreate.map(field => ({ create: field.create })),
+          ...fieldsToUpdate.map(field => ({
+            update: {
+              key: field.create.key,
+              description: field.create.description,
+              required: field.create.required,
+              validations: field.create.validations
+            }
+          }))
+        ]
+      }
+    };
+  }
+
+  async sendUpdateRequest(variables) {
+    this.logMessage('info', `Variables finales: ${JSON.stringify(variables, null, 2)}`);
+    const result = await this.targetClient.request(UPDATE_METAOBJECT_DEFINITION, variables);
+
+    if (result.metaobjectDefinitionUpdate.userErrors.length > 0) {
+      this.logMessage('warning', '\n❌ ERREURS DÉTECTÉES');
+      result.metaobjectDefinitionUpdate.userErrors.forEach(error => {
+        this.logMessage('warning', `Erreur: ${error.message}`);
+        this.logMessage('warning', `Champ: ${error.field}`);
+        this.logMessage('warning', `Code: ${error.code}`);
+      });
+    } else {
+      this.logMessage('success', '\n✅ Mise à jour réussie');
     }
   }
 
