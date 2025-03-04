@@ -472,44 +472,6 @@ class ManageMeta {
     });
   }
 
-  updateValidations(fieldsToCreate) {
-    return fieldsToCreate.map(field => {
-      if (field.create.validations?.some(v => v.name === 'metaobject_definition_id')) {
-        const matchingDefinition = this.findMatchingMetaobject(field.create.key);
-        if (!matchingDefinition) {
-          this.logMessage('warning', `Pas de metaobject trouvé pour ${field.create.key}`);
-          return null;
-        }
-        field.create.validations = [{ name: 'metaobject_definition_id', value: matchingDefinition.id }];
-      }
-      return field;
-    });
-  }
-  async updateMetaobjectFields(definitionId, fieldDefinitions) {
-    try {
-      this.logMessage('info', '\n=== DÉBUT DE LA MISE À JOUR DES CHAMPS ===');
-      
-      // 1. Récupérer les champs existants et les séparer
-      const existingFields = await this.getExistingFields(definitionId);
-      const { fieldsToCreate, fieldsToUpdate } = this.separateFields(fieldDefinitions, existingFields);
-      
-      // 2. Mettre à jour les validations avec les bons IDs
-      const targetMetaobjects = await this.getAllMetaobjectDefinitions(this.targetClient);
-      const updatedFieldsToCreate = this.updateMetaobjectValidations(fieldsToCreate, targetMetaobjects);
-      const updatedFieldsToUpdate = this.updateMetaobjectValidations(fieldsToUpdate, targetMetaobjects);
-      
-      // 3. Construire et envoyer la requête
-      const variables = this.buildUpdateVariables(definitionId, updatedFieldsToCreate, updatedFieldsToUpdate);
-      await this.sendUpdateRequest(variables);
-      
-    } catch (error) {
-      this.logMessage('error', `\n❌ ERREUR GLOBALE: ${error.message}`);
-      if (error.response?.errors) {
-        this.logMessage('error', `Erreurs GraphQL: ${JSON.stringify(error.response.errors, null, 2)}`);
-      }
-    }
-  }
-
   updateMetaobjectValidations(fields, targetMetaobjects) {
     return fields.map(field => {
       if (!this.hasMetaobjectValidations(field)) return field;
