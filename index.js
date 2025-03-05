@@ -297,7 +297,7 @@ class ManageMeta {
     if (def.type.name.includes('metaobject_reference')) {
       this.logMessage('info', `Type metaobject_reference détecté pour ${def.namespace}.${def.key}`);
       
-      const matchingDefinition = this.findMatchingMetaobjectForMetafield(def);
+      const matchingDefinition = await this.findMatchingMetaobjectForMetafield(def);
       if (!matchingDefinition) {
         throw new Error(`Aucun metaobject trouvé pour ${def.namespace}.${def.key}`);
       }
@@ -313,12 +313,41 @@ class ManageMeta {
     return validations;
   }
 
-  findMatchingMetaobjectForMetafield(def) {
-    return this.targetMetaobjectDefinitions.find(metaobj => {
+  async findMatchingMetaobjectForMetafield(def) {
+    this.logMessage('info', `\n=== RECHERCHE DE CORRESPONDANCE POUR METAFIELD ===`);
+    this.logMessage('info', `Clé du metafield: ${def.key}`);
+    
+    if (!this.targetMetaobjectDefinitions || this.targetMetaobjectDefinitions.length === 0) {
+      this.logMessage('error', 'targetMetaobjectDefinitions n\'est pas défini donc on récupère les metaobjects de la boutique cible');
+      this.targetMetaobjectDefinitions = await this.getAllMetaobjectDefinitions(this.targetClient);
+      this.logMessage('success', `✅ Metaobjects récupérés avec succès : ${this.targetMetaobjectDefinitions.length}`);
+    }
+
+    this.logMessage('info', `Nombre de metaobjects cibles disponibles: ${this.targetMetaobjectDefinitions.length}`);
+    
+    const match = this.targetMetaobjectDefinitions.find(metaobj => {
       const fieldKey = def.key.toLowerCase();
       const metaobjectType = metaobj.type.toLowerCase();
-      return fieldKey.includes(metaobjectType);
+      
+      this.logMessage('info', `Comparaison - Clé du champ: "${fieldKey}" avec Type metaobject: "${metaobjectType}"`);
+      const includes = fieldKey.includes(metaobjectType);
+      this.logMessage('info', `La clé contient le type ? ${includes}`);
+      
+      return includes;
     });
+
+    if (match) {
+      this.logMessage('success', `✅ Correspondance trouvée: ${match.type}`);
+      this.logMessage('info', `Détails de la correspondance:
+        - ID: ${match.id}
+        - Type: ${match.type}
+        - Clé d'origine: ${def.key}
+      `);
+    } else {
+      this.logMessage('warning', `❌ Aucune correspondance trouvée pour la clé: ${def.key}`);
+    }
+
+    return match;
   }
 
   buildMetafieldVariables(def, validations, isUpdate = false) {
