@@ -47,8 +47,8 @@ const CREATE_METAFIELD_DEFINITION = `
 `;
 
 const UPDATE_METAFIELD_DEFINITION = `
-  mutation UpdateMetafieldDefinition($id: ID!, $definition: MetafieldDefinitionInput!) {
-    metafieldDefinitionUpdate(id: $id, definition: $definition) {
+  mutation UpdateMetafieldDefinition($definition: MetafieldDefinitionUpdateInput!) {
+    metafieldDefinitionUpdate(definition: $definition) {
       updatedDefinition {
         id
       }
@@ -284,7 +284,7 @@ class ManageMeta {
     try { 
       this.logMessage('info', `Mise à jour de la définition du metafield: ${def.namespace}.${def.key} (${def.ownerType})`);
       const validations = await this.getMetafieldValidations(def);
-      const variables = this.buildMetafieldVariables(def, validations);
+      const variables = this.buildMetafieldVariables(def, validations, true);
       await this.sendMetafieldUpdateRequest(variables, def);
     } catch (error) {
       this.logMessage('error', `Erreur pour l'update du metafield ${def.namespace}.${def.key}: ${error.message}`);
@@ -321,18 +321,22 @@ class ManageMeta {
     });
   }
 
-  buildMetafieldVariables(def, validations) {
-    const variables = {
+  buildMetafieldVariables(def, validations, isUpdate = false) {
+    var variables = {
       definition: {
         name: def.name,
         namespace: def.namespace,
         key: def.key,
         description: def.description,
-        type: def.type.name,
         ownerType: def.ownerType,
         validations: validations
       }
     };
+
+    // Ajouter le type seulement si ce n'est pas une mise à jour
+    if (!isUpdate) {
+      variables.definition.type = def.type.name;
+    }
 
     this.logMessage('info', `Variables pour ${def.namespace}.${def.key}: ${JSON.stringify(variables, null, 2)}`);
     return variables;
