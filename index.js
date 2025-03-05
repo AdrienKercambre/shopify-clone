@@ -46,6 +46,20 @@ const CREATE_METAFIELD_DEFINITION = `
   }
 `;
 
+const UPDATE_METAFIELD_DEFINITION = `
+  mutation UpdateMetafieldDefinition($id: ID!, $definition: MetafieldDefinitionInput!) {
+    metafieldDefinitionUpdate(id: $id, definition: $definition) {
+      updatedDefinition {
+        id
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 const GET_METAOBJECT_DEFINITIONS = `
   query GetMetaobjectDefinitions($after: String) {
     metaobjectDefinitions(first: 250, after: $after) {
@@ -169,9 +183,9 @@ class ManageMeta {
 
 
       // Créer les metaobject definitions dans la boutique cible
-      await this.duplicateMetaobjectDefinitions();
+      //await this.duplicateMetaobjectDefinitions();
       // Créer les metafield definitions dans la boutique cible
-      //await this.duplicateMetafieldDefinitions();
+      await this.duplicateMetafieldDefinitions();
 
     } catch (error) {
       this.logMessage('error', `Erreur lors de l'initialisation: ${error.message}`);
@@ -238,9 +252,15 @@ class ManageMeta {
         this.logMessage('error', 'Aucune définition de metafield sur la boutique source trouvée');
         return;
       }
-      
+      this.targetMetafieldDefinitions = await this.getAllMetafieldDefinitions(this.targetClient);
       for (const defMetafield of this.sourceMetafieldDefinitions.filter(def => def.ownerType === 'COLLECTION')) {
-        await this.createMetafieldDefinition(defMetafield);
+        if(this.targetMetafieldDefinitions.find(def => def.namespace === defMetafield.namespace && def.key === defMetafield.key)) {
+          this.logMessage('info', `Le metafield ${defMetafield.namespace}.${defMetafield.key} existe déjà dans la boutique cible donc on l'update`);
+          await this.updateMetafieldDefinition(defMetafield);
+        } else {
+          this.logMessage('info', `Le metafield ${defMetafield.namespace}.${defMetafield.key} n'existe pas dans la boutique cible donc on le crée`);
+          await this.createMetafieldDefinition(defMetafield);
+        }
       }
     } catch (error) {
       this.logMessage('error', `Erreur globale: ${error.message}`);
@@ -256,7 +276,18 @@ class ManageMeta {
       
       await this.sendMetafieldCreationRequest(variables, def);
     } catch (error) {
-      this.logMessage('error', `Erreur pour ${def.namespace}.${def.key}: ${error.message}`);
+      this.logMessage('error', `Erreur pour la création du metafield ${def.namespace}.${def.key}: ${error.message}`);
+    }
+  }
+
+  async updateMetafieldDefinition(def) {
+    try { 
+      this.logMessage('info', `Mise à jour de la définition du metafield: ${def.namespace}.${def.key} (${def.ownerType})`);
+      const validations = await this.getMetafieldValidations(def);
+      const variables = this.buildMetafieldVariables(def, validations);
+      await this.sendMetafieldUpdateRequest(variables, def);
+    } catch (error) {
+      this.logMessage('error', `Erreur pour l'update du metafield ${def.namespace}.${def.key}: ${error.message}`);
     }
   }
 
@@ -318,6 +349,26 @@ class ManageMeta {
         });
       } else {
         this.logMessage('success', `Définition créée avec succès: ${def.namespace}.${def.key}`);
+      }
+    } catch (error) {
+      if (error.response?.errors) {
+        this.logMessage('error', `Erreurs GraphQL: ${JSON.stringify(error.response.errors, null, 2)}`);
+      }
+      throw error;
+    }
+  }
+
+  async sendMetafieldUpdateRequest(variables, def) {
+    try {
+      const result = await this.targetClient.request(UPDATE_METAFIELD_DEFINITION, variables);
+      
+      if (result?.metafieldDefinitionUpdate?.userErrors?.length > 0) {
+        this.logMessage('error', `Erreur pour ${def.namespace}.${def.key}:`);
+        result.metafieldDefinitionUpdate.userErrors.forEach(error => {
+          this.logMessage('error', `- ${error.message}`);
+        });
+      } else {
+        this.logMessage('success', `Définition mise à jour avec succès: ${def.namespace}.${def.key}`);
       }
     } catch (error) {
       if (error.response?.errors) {
