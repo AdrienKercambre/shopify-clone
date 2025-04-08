@@ -183,9 +183,9 @@ class ManageMeta {
 
 
       // Créer les metaobject definitions dans la boutique cible
-      //await this.duplicateMetaobjectDefinitions();
+      await this.duplicateMetaobjectDefinitions();
       // Créer les metafield definitions dans la boutique cible
-      await this.duplicateMetafieldDefinitions();
+      //await this.duplicateMetafieldDefinitions();
 
     } catch (error) {
       this.logMessage('error', `Erreur lors de l'initialisation: ${error.message}`);
